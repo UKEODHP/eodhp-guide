@@ -34,6 +34,35 @@ There are some manual steps required. While these will be automated as far as po
 
 ### Keycloak
 
+#### Update GitHub SSO configuration
+
+In order for users to authenticate via GitHub, Keycloak needs access to the GitHub OAuth app secret.
+
+##### First time setup
+
+This step will not normally be required for restarting the dev or test clusters.
+
+1. Log in to GitHub and navigate to the `KeyCloakAuth` OAuth App
+2. Under `General`, navigate to `Client secrets` and click `Generate a new client secret`. Copy the secret
+3. In AWS Secrets Manager, find the `eodhp-<env>` secret
+4. Click `Retrieve secrets value`
+5. Click `Edit`
+6. Ensure that there is a key called `keycloak.auth.githubSecret`. Add if not present
+7. Paste the secret in the values field
+8. Save
+
+#### Updating GitHub secret
+
+1. Log in to AWS Secrets Manager and find the `eodhp-<env>` secret
+2. Click `Retrieve secrets value`
+3. Copy the value for the `keycloak.auth.githubSecret` entry
+4. Navigate to the Keycloak admin panel at `<env>.eodatahub.org.uk/keycloak/admin` and log in
+5. Select the `eodhp` realm
+6. Click `Identity Providers`
+7. Click `github`
+8. Under `Settings`, update the Client Secret with the value from AWS
+9. Save
+
 #### Add Admin User to EODHP Realm
 
 1. In Keycloak admin UI:
@@ -83,32 +112,3 @@ In order for users to have access to Jupyter Lab, they must be added to the jupy
 3. Manage groups
 4. Create jupyter-lab group
 5. Add users to group
-
-#### Update GitHub SSO configuration
-
-In order for users to authenticate via GitHub, Keycloak needs access to the GitHub OAuth app secret.
-
-##### First time setup
-
-This step will not normally be required for restarting the dev or test clusters.
-
-1. Log in to GitHub and navigate to the `KeyCloakAuth` OAuth App
-2. Under `General`, navigate to `Client secrets` and click `Generate a new client secret`. Copy the secret
-3. In AWS Secrets Manager, find the `eodhp-<env>` secret
-4. Click `Retrieve secrets value`
-5. Click `Edit`
-6. Ensure that there is a key called `keycloak.auth.githubSecret`. Add if not present
-7. Paste the secret in the values field
-8. Save
-
-#### Updating GitHub secret in Keycloak
-
-1. Log in to AWS Secrets Manager and find the `eodhp-<env>` secret
-2. Click `Retrieve secrets value`
-3. Copy the value for the `keycloak.auth.githubSecret` entry
-4. Navigate to the Keycloak admin panel at `<env>.eodatahub.org.uk/keycloak/admin` and log in
-5. Select the `eodhp` realm
-6. Click `Identity Providers`
-7. Click `github`
-8. Under `Settings`, update the Client Secret with the value from AWS
-9. Save
