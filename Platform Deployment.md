@@ -28,6 +28,14 @@ kubectl apply -k apps/argocd
 kubectl apply -k eodhp/envs/dev
 ```
 
+### Deployment Repository Authorisation
+
+If the ArgoCD deployment is private then you will have to generate a deployment key for the repository and connect the ArgoCD instance to the repository before it can read it. This can be done using the `argo` CLI or via the ArgoCD web UI.
+
+```bash
+argocd repo add git@github.com:yourusername/yourrepo.git --ssh-private-key-path ~/.ssh/repo_key
+```
+
 ## Manual Configuration
 
 There are some manual steps required. While these will be automated as far as possible the current steps are outlined below.
