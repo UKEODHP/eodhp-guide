@@ -2,9 +2,9 @@
 
 ## Infrastructure
 
-The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-infrastucture).
+The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-infrastucture) and [Supporting Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure)
 
-The Terraform repo manages multiple deployment environments using workspaces. Before deploying ensure you are in the correct workspace.
+The Terraform repos manages multiple deployment environments using workspaces. Before deploying ensure you are in the correct workspace.
 
 The deployment configuration variables are stored in the terraform/envs/\*/\*.tfvars files.
 
@@ -14,6 +14,29 @@ terraform workspace list
 terraform workspace select dev
 terraform apply -var-file envs/dev/dev.tfvars
 ```
+
+## Supporting Infrastructure Deployment
+
+Before deploying the main EO DataHub Platform infrastructure, the supporting infrastructure must be deployed. This includes shared resources whose lifecycles are independent of the deployment environments (dev/test/prod). 
+
+For managing these resources, visit the [Supporting Infrastructure Terraform repository](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure). This repository contains Terraform configurations for creating and managing resources such as S3 buckets and IAM roles that are essential across all clusters.
+
+### Deployment Steps
+
+1. **Initialize Terraform**:
+   Navigate to the Terraform directory where the configurations are stored.
+   ```bash
+   cd terraform
+   terraform init # Initialize the Terraform environment
+   ```
+
+2. **Deploy the Infrastructure**:
+    Ensure your AWS account ID and GitHub organization are specified in the vars/terraform.tfvars file. Then, apply the Terraform configuration.
+    ```
+    terraform apply -var-file vars/terraform.tfvars # Apply the Terraform configuration
+    ```
+
+Complete these steps before proceeding with the deployment of the main infrastructure.
 
 ## Applications
 
