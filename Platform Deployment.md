@@ -17,9 +17,17 @@ terraform apply -var-file envs/dev/dev.tfvars
 
 ## Supporting Infrastructure Deployment
 
-Before deploying the main EO DataHub Platform infrastructure, the supporting infrastructure must be deployed. This includes shared resources whose lifecycles are independent of the deployment environments (dev/test/prod). 
+Before deploying the main EO DataHub Platform infrastructure, the supporting infrastructure must be deployed.
 
-For managing these resources, visit the [Supporting Infrastructure Terraform repository](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure). This repository contains Terraform configurations for creating and managing resources such as S3 buckets and IAM roles that are essential across all clusters.
+The supporting infrastructure repository contains Terraform configurations for creating and managing resources used across deployed environments such as:
+ - The VPC within which all deployed clusters are hosted
+ - Public NAT gateways
+ - IAM roles
+ - S3 buckets
+
+The lifecycles of these resources are independent of the deployment environments (dev/test/prod).
+
+For managing these resources, visit the [Supporting Infrastructure Terraform repository](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure).
 
 ### Deployment Steps
 
