@@ -12,6 +12,12 @@
 
 - Steven Gillies
 
+## Workflow Runner
+
+### Lead Developer
+
+- Tom Jellicoe
+
 ## Data Access Services
 
 ### Lead Developer
