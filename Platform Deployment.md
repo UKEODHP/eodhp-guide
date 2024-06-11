@@ -28,7 +28,7 @@ Requests intended for an S3 bucket should also pass through two Lambda@Edge func
 
 In the repository, these functions are stored under lambda-functions. Any required modules will be installed by the terraform, and the scripts are redeployed to AWS as zip files when changes are made.
 
-The result of this is that requests to `https://my-workspace.workspaces.dev.eodhp.eco-ke-staging.com/files/store-name/object/full/name.tif` with a valid token will be directed to an object located at `my-workspace/object/full/name.tif` in bucket `store-name`.
+The result of this is that requests to `https://my-workspace.<workspace domain>/files/store-name/object/full/name.tif` with a valid token will be directed to an object located at `my-workspace/object/full/name.tif` in bucket `store-name`.
 
 ## Supporting Infrastructure Deployment
 
