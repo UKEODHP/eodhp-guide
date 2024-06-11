@@ -2,7 +2,7 @@
 
 ## Infrastructure
 
-The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-infrastucture) and [Supporting Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure)
+The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-infrastucture) and [Supporting Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure) repositories.
 
 The Terraform repos manages multiple deployment environments using workspaces. Before deploying ensure you are in the correct workspace.
 
@@ -14,6 +14,21 @@ terraform workspace list
 terraform workspace select dev
 terraform apply -var-file envs/dev/dev.tfvars
 ```
+
+### Workspace cloudfront distribution
+
+The terraform deployment repository sets up a cloudfront distribution to manage traffic to the workspace domains.
+
+By default, requests are directed to the elastic load balancer.
+Traffic matching the URI form `/files/<workspace_bucket>` are instead directed to a workspace S3 bucket origin. This origin must be defined in terraform for each new bucket to be opened up to https access.
+
+Requests intended for an S3 bucket should also pass through two Lambda@Edge functions.
+- The first of these runs on `viewer-request`, and validates the access token against a secret key located in AWS secrets. Additionally, it stores the host of the request as `X-Original-Host`, since this contains the workspace name.
+- The second lambda function runs on `origin-request`, and uses the workspace name and URI to redirect the request to an item in the S3 bucket.
+
+In the repository, these functions are stored under lambda-functions. Any required modules will be installed by the terraform, and the scripts are redeployed to AWS as zip files when changes are made.
+
+The result of this is that requests to `https://my-workspace.workspaces.dev.eodhp.eco-ke-staging.com/files/store-name/object/full/name.tif` with a valid token will be directed to an object located at `my-workspace/object/full/name.tif` in bucket `store-name`.
 
 ## Supporting Infrastructure Deployment
 
