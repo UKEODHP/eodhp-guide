@@ -82,6 +82,18 @@ If the ArgoCD deployment is private then you will have to generate a deployment 
 argocd repo add git@github.com:yourusername/yourrepo.git --ssh-private-key-path ~/.ssh/repo_key
 ```
 
+### Centralised Postgres Database
+
+The supporting terraform repository configures an Aurora serverless v2 Postgres database for multiple applications to use.
+The ArgoCD deployment installs and configures a Postgres operator which adds databases, users and schemas to the infrastructure, with credentials stored as kubernetes secrets. The intended design is that each application will have its own database, and each database will have a schema and user per environment.
+
+The process for setting up a new application to use the database is as follows:
+1. Create a `Postgres` resource in `databases.yaml`. This contains basic information on the new database and sets up a schema for the environment.
+2. Create a `PostgresUser` resource in `users.yaml`. This creates a user as an owner of the database, and creates kubernetes secrets for the user.
+3. Create a `Job` in `user-permissions.yaml`. This will set permissions of the user to restrict it to the environment's schema by running the script in `postgres-scripts.yaml`. It requires postgres admin credentials.
+
+To allow an application to use the newly created database, credentials may be obtained using the kubernetes secret. The `ClusterSecretStore` set up in `secret-store.yaml` allows this across namespaces.
+
 ## Manual Configuration
 
 There are some manual steps required. While these will be automated as far as possible the current steps are outlined below.
