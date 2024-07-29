@@ -6,7 +6,7 @@ Code on a feature branch in a code repository can be deployed to a development c
 
 First, push your changes to GitHub on the feature branch, for example `feature/EODHP-123-example`. The GitHub actions will run to lint ('pre-commit'), security scan, unit test and build a Docker image ('aws-ecr-build'). Assuming aws-ecr-build runs successfully, a Docker image with a tag such as `feature-EODHP-123-example-latest` will be pushed to AWS ECR.
 
-Secondly, edit the ArgoCD configuration for the development cluster and change the image for the component to use the new tag, `feature-EODHP-123-example-latest`. This shouldn't be merged to branches controlling other clusters so this doesn't need to be part of a PR or ArgoCD feature branch. The target service also needs to use `imagePullPolicy: Always`, which can be set and merged if it isn't set already.
+Secondly, edit the ArgoCD configuration for the development cluster and change the image for the component to use the new tag, `feature-EODHP-123-example-latest`. This shouldn't be merged to branches controlling other clusters so this doesn't need to be part of a PR or ArgoCD feature branch. The target service also needs to use `imagePullPolicy: Always`, which can be set and merged as part of the later PR if it isn't set already.
 
 Finally, either:
 * go to the ArgoCD UI, find the deployment for your app (marked as type 'deploy') and choose 'Restart' from its menu;
