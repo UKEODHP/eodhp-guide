@@ -2,7 +2,7 @@
 
 ## Infrastructure
 
-The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-infrastucture) and [Supporting Terraform deployment](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure) repositories.
+The EODHP is designed to be deployed to AWS. The infrastructure deployment is managed by the [Terraform deployment](https://github.com/EO-DataHub/eodhp-deploy-infrastucture) and [Supporting Terraform deployment](https://github.com/EO-DataHub/eodhp-deploy-supporting-infrastructure) repositories.
 
 The Terraform repos manages multiple deployment environments using workspaces. Before deploying ensure you are in the correct workspace.
 
@@ -42,7 +42,7 @@ The supporting infrastructure repository contains Terraform configurations for c
 
 The lifecycles of these resources are independent of the deployment environments (dev/test/prod).
 
-For managing these resources, visit the [Supporting Infrastructure Terraform repository](https://github.com/UKEODHP/eodhp-deploy-supporting-infrastructure).
+For managing these resources, visit the [Supporting Infrastructure Terraform repository](https://github.com/EO-DataHub/eodhp-deploy-supporting-infrastructure).
 
 ### Deployment Steps
 
@@ -63,7 +63,7 @@ Complete these steps before proceeding with the deployment of the main infrastru
 
 ## Applications
 
-The platform components and applications are managed using the GitOps framework ArgoCD in the [ArgoCD deployment](https://github.com/UKEODHP/eodhp-argocd-deployment).
+The platform components and applications are managed using the GitOps framework ArgoCD in the [ArgoCD deployment](https://github.com/EO-DataHub/eodhp-argocd-deployment).
 
 The repo contains the configuration for multiple environments.
 
