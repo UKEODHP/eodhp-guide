@@ -16,7 +16,6 @@ Configuration:
 - stac-harvester-configurations
 - test-catalogue-data
 
-
 Code:
 - catalogue-search-service
 - configscanning
@@ -29,7 +28,6 @@ Code:
 - stac-fastapi-ingester
 - stac-harvester
 - stac-harvester-ingester
-
 
 
 ## Workflow and Analysis System
@@ -52,7 +50,6 @@ Code:
 - eodhp-ades-workspace-access
 - eoepca-proc-service-template
 - stac-workflow-generator
-
 
 Configuration:
 
@@ -101,6 +98,7 @@ Code:
 - eodhp-resource-catalogue-ui
 - stac-browser
 
+
 ## IAM
 
 ### Lead Developer
@@ -117,7 +115,6 @@ Configuration:
 
 - eodhp-opa-config-dev
 - eodhp-opa-config-test
-
 
 
 ## System Management
