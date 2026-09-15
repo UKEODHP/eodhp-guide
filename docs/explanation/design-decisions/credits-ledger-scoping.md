@@ -67,27 +67,57 @@ Everything downstream stores a `policy_id`, so the policy tables come before the
 
 ## Wave 2 — the pricing engine
 
-| ID | Task | Est | Notes |
-|---|---|---|---|
-| T6 | Add `workspace_category` and read the category from `workspace-settings` | 1d | The Python side works from the policy's `default_category` until the Go producer sends the field. That is D6's specified behaviour for an uncategorised workspace, so it is not a stopgap. Fix the `member_group`/`Owner` schema drift in the same pass |
-| T7 | The credit pricing function | 0.5d | `Decimal(quantity) × credits_per_unit × multiplier`, with a documented rounding point. A pure function with no session. This is the highest-value test target in the programme, because D8's replayability depends on it |
+| ID | Task | Est | Status | Notes |
+|---|---|---|---|---|
+| T6 | Add `workspace_category` and read the category from `workspace-settings` | 1d | Part done | The table, the read at pricing time and `billing-admin set-category` have landed, so a category can be assigned and a multiplier applied today. What remains is cross-repo: the Go producer does not send the field, so nothing populates the table automatically. The Python side works from the policy's `default_category` until the Go producer sends the field. That is D6's specified behaviour for an uncategorised workspace, so it is not a stopgap. Fix the `member_group`/`Owner` schema drift in the same pass. Adding the field and fixing the drift both change `eodhp-utils` and `eodhp-workspace-manager`, so only the table and the read-if-present can land here alone |
+| T7 | The credit pricing function | 0.5d | Done | `price_usage` in `pricing.py`, over a `RateCard` — a policy's numbers projected over values, the counterpart to `PolicyFingerprint`. `PricingPolicy.rate_card()` makes the projection from a stored row. **Nothing is rounded**; see *Where rounding happens* in the [schema note](credits-ledger-schema.md). Resolving the category, including D6's fallback to the default, is part of pricing rather than of looking a rate up, so it lives on the rate card |
 
 ## Wave 3 — the ledger
 
-| ID | Task | Est | Notes |
-|---|---|---|---|
-| T8 | Add `credit_ledger_transaction`, the `transaction_type` enum, and the idempotency index | 1.5d | The first enum in the schema, so it carries the migration discipline: `sa.Enum(...).create(bind)` on upgrade and `drop()` on downgrade. Alembic does not autogenerate enum changes and there are no migration tests, so read the generated revision rather than trusting `alembic check` |
-| T9 | Write debits from the ingester | 1d | `AccountingIngesterMessager.process_payload` returns an empty action list today. Resolve the policy and category, price the event, insert one row |
+| ID | Task | Est | Status | Notes |
+|---|---|---|---|---|
+| T8 | Add `credit_ledger_transaction`, the `transaction_type` enum, and the idempotency index | 1.5d | Done | Revision `0b4b174175ad`, with `credit_balance_snapshot` and `workspace_category` in the same revision. Two departures from the [schema note](credits-ledger-schema.md): `policy_id` and `category` are nullable, because a grant is not priced, with `ck_credit_ledger_transaction_debit_is_priced` stating the invariant that does hold; and the snapshot has a surrogate key, because PostgreSQL will not accept a nullable primary key column. Its uniqueness is two partial indexes rather than `UNIQUE NULLS NOT DISTINCT`, which is PostgreSQL 15 and failed on the deployed 14; the test container was pinned to 17 and so never saw it. The enum discipline was needed twice over - `pg_enum()` in `models.py` now passes `values_callable`, without which SQLAlchemy stores member *names*, and the column is declared `create_type=False` so `create_table` does not emit a second CREATE TYPE |
+| T9 | Write debits from the ingester | 1d | Done | `AccountingIngesterMessager._charge_event`. The event and its debit commit in one transaction, so usage is never recorded uncharged. Three cases record the event and log at error level rather than failing the message: no policy covers the usage time, the policy holds no rate for the SKU, or the quantity is not a measurement. None is fixed by redelivery, and a stored quantity can be charged later (T18) where a dropped one cannot be recovered |
 
 ## Wave 4 — read paths
 
-| ID | Task | Est | Notes |
-|---|---|---|---|
-| T10 | Balance read and the snapshot table | 1.5d | Snapshot plus the delta of rows newer than `as_of`. Key the snapshot on `recorded_at`, or a backfilled event falls out of both halves of the sum |
-| T11 | Policy read endpoints | 1d | **Half done.** `GET /accounting/prices` now serves credit rates from the policy in force, brought forward as part of removing fiat pricing: `price` became `credits_per_unit`, and `uuid` and `valid_until` are gone. `eodhp-workspace-ui` reads this through `InvoicesContext` and needs updating to match. Still to do: `GET /accounting/pricing-policy`, returning the current policy and its version history |
-| T12 | Usage reads with period, user and SKU filters | 1d | `SUM(credits)` grouped by the requested dimension, with `HAVING SUM(credits) <> 0` so a fully reversed charge disappears instead of showing as a zero row (D12) |
-| T13 | Explainable pricing endpoint | 0.5d | Reads the quantity, policy version and category stored on each ledger row and shows how the charge was reached. Cheap because T7 to T9 store what it needs |
-| T14 | Pre-execution cost estimate | 0.5d | Runs T7's function against a proposed quantity and writes nothing. Advisory only (D4) |
+| ID | Task | Est | Status | Notes |
+|---|---|---|---|---|
+| T10 | Balance read and the snapshot table | 1.5d | Done | `GET /workspaces/{workspace}/accounting/balance`, any member. `CreditLedgerTransaction.balance` reads the latest snapshot plus every row recorded after it, and is correct with no snapshot at all - nothing writes one yet, so that is the path in use. Two statements rather than this note's single join, which returns no row for a workspace with no snapshot and one row per snapshot where only the latest is wanted. See *A snapshotter cannot cut at "now"* below |
+| T11 | Policy read endpoints | 1d | Done | `GET /accounting/prices` serves credit rates from the policy in force, brought forward as part of removing fiat pricing: `price` became `credits_per_unit`, and `uuid` and `valid_until` are gone. `eodhp-workspace-ui` reads this through `InvoicesContext` and needs updating to match. `GET /accounting/pricing-policy` serves the whole rate card in force as one version - every rate, every multiplier and the default category. **Version history is not served**: it is an audit read rather than a product one, and `billing-admin ls <sku>` already covers it. The endpoint requires a token but asks nothing of its claims, through a `require_token` dependency now carried by every endpoint that has no workspace or account in its path |
+| T12 | Usage reads with period, user and SKU filters | 1d | | `SUM(credits)` grouped by the requested dimension, with `HAVING SUM(credits) <> 0` so a fully reversed charge disappears instead of showing as a zero row (D12) |
+| T13 | Explainable pricing endpoint | 0.5d | Done | `GET /workspaces/{workspace}/accounting/ledger/{transaction}`, any member. The row stores the quantity, the policy and the resolved category but not the rate or the multiplier, so the endpoint projects that policy into a rate card and prices again through `price_usage` - the same function that produced the charge, so the two cannot drift. The recomputed `charge` equalling the stored `credits` is the check on the whole scheme. `pricing` is null for a grant. A transaction in another workspace is a 404, not a 403 |
+| T14 | Pre-execution cost estimate | 0.5d | | Runs T7's function against a proposed quantity and writes nothing. Advisory only (D4) |
+
+### A snapshotter cannot cut at "now"
+
+`recorded_at` defaults to `func.now()`, and in PostgreSQL `now()` is the *transaction*
+timestamp. Every row written inside one transaction therefore carries the same `recorded_at`,
+and no ordering exists between them.
+
+This decides how T16 must write a snapshot. It cannot take its cut from the clock: rows it has
+just summed may carry the very instant it would cut at, and the delta is `recorded_at > as_of`,
+so those rows would be counted in neither half. It has to cut at the `recorded_at` of the
+newest row it included.
+
+The related hazard is not solved by either choice of clock. A transaction that writes a row and
+commits later can leave a `recorded_at` earlier than a snapshot taken in between, so the row
+falls outside the delta permanently. `clock_timestamp()` makes it worse rather than better,
+because it moves the timestamp further from the commit. Whatever writes snapshots needs to
+account for it, and until something does, the ledger is read in full and is always right.
+
+### The display scale of a credit is undecided
+
+Nothing is rounded when a charge is priced, which is deliberate (D8), so a charge carries the
+scale of its inputs multiplied together: 3600.0 CPU-seconds at 0.001 credits with a multiplier
+of 0.5 stores `1.80000`, and a balance takes the largest scale among the rows summed. The
+schema note says read paths round for display, but no read path does, because no decision has
+been taken about how many decimal places a credit has.
+
+`GET /accounting/balance` therefore returns `"994.60000"` where a reader expects `"994.60"`.
+This is cosmetic and it is a product decision rather than a schema one, but it will reach the
+Credits page unless it is taken. One quantisation in `ExactDecimal`, or a credit-specific type
+beside it, is the whole change.
 
 ## Wave 5 — administration and control
 
@@ -122,7 +152,9 @@ So neither source can be trusted for the audience list. Read `aud` off a real to
 
 ## Effort
 
-Waves 0 to 5 total about 23 days, of which T1 to T5 account for 4.5 days and are done, plus half of T11. This excludes the two tasks below that remain blocked, and matches the earlier estimate closely enough that the [ADR](accounting-billing-backend-adr.md) does not need revising.
+Waves 0 to 5 total about 23 days. Done: T1 to T5, T7, T8, T9, T10, T11 and T13, which is 11 days, plus most of T6. This excludes the two tasks below that remain blocked, and matches the earlier estimate closely enough that the [ADR](accounting-billing-backend-adr.md) does not need revising.
+
+Waves 3 and 4 came in close to their estimates. What they did not include is the demonstration surface: `billing-admin` gained `grant`, `set-category` and `ledger` so that the whole path can be driven from a terminal without the front end, and the walkthrough in the service's own `README.md` is the script for it. `grant` is not T15 - it has no endpoint and no authorisation, and T15 is still to do - but it is what makes a balance start above zero, without which a demonstration shows a workspace going into deficit on its first charge.
 
 T21 accounts for 1.5 of those days and is hardening rather than a credit feature. It is counted here because it gates wave 5, but it would be defensible to fund it separately.
 
@@ -180,6 +212,7 @@ The earlier version of this document listed eight gaps. Six are now closed by a 
 | Versioning asymmetry between price and category | D6 pins the resolved category on every ledger row |
 | The exchange rate had no consumer | Confirmed, and it never acquired one. Removed 2026-09-08 with `billing_item_price`; see the revision to D2 |
 | Access control was not stated per endpoint | D11. T1 |
+| `/accounting/skus` and `/accounting/prices` were anonymously readable | Settled 2026-09-15: every endpoint requires a token. See below |
 
 Two remain open:
 
@@ -194,7 +227,7 @@ Two remain open:
 - Whether `accounting-service` can be reached from inside the cluster without passing through oauth2-proxy. If it can, T21 is not hardening but a fix, and its priority changes.
 - Which audience values appear in the tokens that reach this service. T21 cannot be finished without them, and they cannot be read reliably from either `realms.yaml` or the existing consumer.
 - The storage-billing charging cycle and proration rules. This gates the first blocked task.
-- Whether reading a balance and usage is open to any workspace member or to admins alone. D11 makes this one constant per endpoint, so it does not block T10 or T12.
-- Whether `/accounting/skus` and `/accounting/prices` should start requiring a token. They take none today, so the credit rates in force stay publicly reachable even though the policy endpoint requires a member.
+- Whether reading a balance and usage is open to any workspace member or to admins alone. Answered as `MinTier.MEMBER` for the balance and the single-transaction endpoints, matching the proposed endpoint table and the usage-data endpoints that predate this work. One constant per endpoint, so it can still be tightened per endpoint without touching the rest.
+- Whether a caller should see every category's multiplier or only the one their workspace prices under. `/accounting/pricing-policy` serves them all today. If it narrows, `PricingPolicyAPIResult.of` is where the list is built, and the route's `Vary` has to gain `Authorization` in the same change. With the same stakeholders as the item above.
 - How often a calibration pass runs. This affects how much tooling T4 deserves, not whether it is correct.
 - **The remote test database still needs migrating, and this is an action rather than a question.** Its schema was created by `create_all` and then stamped at the baseline, so `alembic_version` claimed it was up to date while five columns were still naive. The chain is `20fef2107e45` → `7c3d5e9a1f42` → `9b4e2c81a7d3` → `9b12692d3f40` → `30ac7fce87ae`, and everything from `9b4e2c81a7d3` on is unapplied. Rehearse against a `pg_dump` copy before touching the real one. Note that `30ac7fce87ae` drops `billing_item_price` and discards its rows, which was accepted on the grounds that nothing consumes that data; its downgrade is deliberately empty, so recovery means restoring the dump.

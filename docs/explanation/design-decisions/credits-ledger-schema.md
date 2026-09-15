@@ -189,8 +189,9 @@ class CreditLedgerTransaction(Base):
     quantity: Mapped[float | None]  # Metered units, for explainability.
 
     # How this was priced: a reference, not a computed cost, so it can be replayed.
-    policy_id: Mapped[UUID] = mapped_column(ForeignKey(PricingPolicy.uuid))
-    category: Mapped[str]  # Resolved at pricing time; survives recategorisation.
+    # Both nullable as built - a grant is not priced. See 'A grant has no policy' below.
+    policy_id: Mapped[UUID | None] = mapped_column(ForeignKey(PricingPolicy.uuid))
+    category: Mapped[str | None]  # Resolved at pricing time; survives recategorisation.
 
     occurred_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True))
     recorded_at: Mapped[datetime] = mapped_column(
@@ -212,7 +213,40 @@ Four properties of this table carry most of the design.
 
 **Signed credits.** `transaction_type` is metadata; the sign carries the arithmetic, so a balance is a `SUM` and a reversal is the negation of the row it reverses. Nothing needs to know the type to compute a balance correctly.
 
-**`Decimal` credits against `float` quantity.** Quantity is a measurement and stays float, matching the existing column. Credits are exact. Pricing converts quantity to `Decimal` before multiplying by the rate and multiplier; multiplying a float by a `Decimal` directly raises in Python, and rounding at the wrong point produces differences that surface later as inexplicable fractions in the explainable-pricing endpoint.
+**`Decimal` credits against `float` quantity.** Quantity is a measurement and stays float, matching the existing column. Credits are exact. Pricing converts quantity to `Decimal` before multiplying by the rate and multiplier; multiplying a float by a `Decimal` directly raises in Python.
+
+The conversion goes through `str`, not `Decimal(quantity)`. The latter converts the float's binary value exactly, so a measured 0.1 arrives as 0.1000000000000000055511151231257827021181583404541015625 and every charge derived from it carries that tail. `str` gives the shortest decimal that round trips to the same float, which is the number the collector reported. `exact_decimal` in `pricing.py` is that boundary.
+
+### A grant has no policy
+
+`policy_id` and `category` were specified NOT NULL and are nullable as built. A grant is not
+priced: no policy applied to it and no category was resolved for it, so a NOT NULL column
+would have to be filled with a policy that did not produce it, and every reader of an audit
+trail would then have to know to disbelieve the field.
+
+The invariant that does hold is a check constraint:
+
+```sql
+CONSTRAINT ck_credit_ledger_transaction_debit_is_priced CHECK (
+    transaction_type <> 'debit' OR (policy_id IS NOT NULL AND category IS NOT NULL)
+)
+```
+
+Stated as a rule about debits rather than as an equivalence between "is a grant" and "has no
+policy". A reversal of a debit carries the original's policy version (D7), and a reversal of a
+grant would carry none, so an equivalence would refuse the second.
+
+The API shape follows from this rather than working around it: the single-transaction endpoint
+nests the arithmetic in a `pricing` object which is null for a grant, so the response says
+which fields are meaningful instead of leaving a reader to infer it from the type.
+
+### Where rounding happens
+
+Nowhere in pricing. `credits` is stored as the product comes out, and the read paths round for display — `ExactDecimal` in `app/models.py` already serialises a `Decimal` without losing scale or falling into exponent notation.
+
+Two reasons, and the second is the one that decided it. Rounding per event rounds every event separately, so a great many small charges each lose their tail and the total drifts away from the quantities that produced it. And a stored charge is meant to be reproducible from the quantity, policy and category beside it (D8); if pricing rounds, a replay reproduces the rounding rule in force when the replay ran rather than the policy that was in force at the time.
+
+So the `credits` column is an unconstrained `NUMERIC` with no precision or scale, which is arbitrary precision in PostgreSQL. Fixing a scale on it would be the same decision made in the schema instead of in the code.
 
 **Both `occurred_at` and `recorded_at`.** Period filters want when the usage happened; audit and reconciliation want when the system learned about it. A back-filled event carries an old `occurred_at` and a recent `recorded_at`. Collapsing them into one column makes both queries wrong.
 
@@ -260,17 +294,53 @@ Append-only. It stops the same breach being published on every subsequent billin
 
 ## Balance
 
+The query above was specified as one join and is two statements as built: read the latest
+snapshot, then sum the rows recorded after it.
+
 ```sql
-SELECT COALESCE(s.balance, 0) + COALESCE(SUM(t.credits), 0)
-FROM credit_balance_snapshot s
-LEFT JOIN credit_ledger_transaction t
-       ON t.workspace = s.workspace
-      AND t.recorded_at > s.as_of
-WHERE s.workspace = :workspace
-GROUP BY s.balance;
+-- The opening figure, or nothing.
+SELECT balance, as_of FROM credit_balance_snapshot
+WHERE workspace = :workspace AND "user" IS NULL
+ORDER BY as_of DESC LIMIT 1;
+
+-- The delta. Without a snapshot, the whole ledger, and still correct.
+SELECT COALESCE(SUM(credits), 0) FROM credit_ledger_transaction
+WHERE workspace = :workspace AND recorded_at > :as_of;
 ```
 
-**`credit_balance_snapshot`** — `workspace`, `user` (UUID, null for the whole-pool total), `as_of` (timestamptz), `balance` (Decimal). Primary key `(workspace, user, as_of)`.
+The single join does not survive contact with the data. `FROM credit_balance_snapshot` returns
+no rows at all for a workspace nobody has snapshotted, so its balance comes back empty rather
+than as the ledger sum, and where snapshots have accumulated it returns one row per snapshot
+when only the latest is wanted.
+
+**`credit_balance_snapshot`** — `uuid` (surrogate primary key), `workspace`, `user` (UUID, null for the whole-pool total), `as_of` (timestamptz), `balance` (Decimal). Unique on `(workspace, user, as_of)`, as two partial indexes.
+
+The primary key was specified as `(workspace, user, as_of)`, which PostgreSQL will not accept:
+a primary key column is NOT NULL, so the whole-pool row could not exist. Hence the surrogate
+key and uniqueness declared separately.
+
+Uniqueness has to account for the null user, because PostgreSQL counts two nulls as different
+values and would let one workspace and instant be snapshotted twice. `UNIQUE NULLS NOT
+DISTINCT` says exactly that in one line, and it is what this table declared until it reached a
+deployed database. **It is PostgreSQL 15, and the deployed estate is 14**, where it is a syntax
+error rather than a degradation - the whole revision fails to apply.
+
+So uniqueness is two partial unique indexes instead, which say the same thing on either
+version: `credit_balance_snapshot_user_unique` on `(workspace, user, as_of)` where the user is
+not null, and `credit_balance_snapshot_pool_unique` on `(workspace, as_of)` where it is. The
+pair must not over-constrain - a per-user snapshot and the whole-pool total belong at the same
+cut - and `tests/integration/test_credit_ledger.py` asserts both halves refuse a duplicate and
+that the two kinds of row coexist.
+
+The general lesson outlived the specific one. The test container and `make check-migrations`
+were pinned to `postgres:17` while the estate ran 14, so every check passed on a feature
+production did not have. Both now default to the oldest deployed version, overridable with
+`PG_IMAGE`.
+
+Whatever writes a snapshot must take its `as_of` from the `recorded_at` of the newest row it
+included, not from the clock. `recorded_at` defaults to `func.now()`, which is the transaction
+timestamp, so rows written together share it and a cut at that instant would drop all of them
+from the delta.
 
 Snapshots are keyed the same way budgets are, because budgets are what need a fast balance read. The null-user row serves the workspace balance endpoint; per-user rows serve per-user threshold checks.
 
@@ -366,6 +436,8 @@ Reconciled against the frontend endpoint proposal in `pending-backend-endpoints.
 
 What already fits: the proposed `/api/workspaces/:id/accounting/*` paths sit in a namespace `accounting-service` already serves (`app/app.py:217`, `:319`), and the "any member", "owner", and "`hub_admin` only" tiers all map onto `workspace_authz` as it stands. The proposal's fourth tier, workspace admin, is being built in PR 53 on `eodhp-workspace-services` and reaches this service as a JWT claim (D11). `GET /api/accounting/pricing-policy` is D3's bundled policy, and `PUT /api/workspaces/:id/category` restricted to `hub_admin` is D6's write side, landing in `eodhp-workspace-services` and reaching this service over Pulsar.
 
+One divergence as built. The proposal marks `GET /api/accounting/pricing-policy` as auth "Any", and it requires a token - any valid one, with no claim examined. That was settled on 2026-09-15 for every endpoint this service serves, `/accounting/skus` and `/accounting/prices` included: "Any" now means any signed-in user rather than anonymous. Nothing here is anonymously readable, and `test_no_endpoint_is_readable_without_a_token` walks the routes so a new one cannot quietly be.
+
 Three things the schema cannot supply on its own:
 
 **No GPU SKU exists.** `products-prices-config.yaml` defines `cpu-seconds`, `memory-gb-seconds`, `EFS-STORAGE-STD` and four `AWS-S3-*` items. The Credits page prices GPU and the budget page treats it as a cost, so `billing-collector` must emit GPU consumption first. This is upstream of everything here.
@@ -381,4 +453,4 @@ Corrections and re-pricing (D7, D8) have no proposed endpoint. Both are `hub_adm
 - The storage-billing decision still gates the charging cycle for storage SKUs. The schema does not depend on it: storage debits are ordinary rows whose `occurred_at` spans the charged period.
 - Reconciliation and backfill remain undesigned. `recorded_at` and the `occurred_at`/`recorded_at` split exist to support it, and `budget_breach_notification` gives it somewhere to record retrospective breaches, but nothing detects a gap yet.
 - Who may read a workspace's balance and usage. The frontend proposal's tables say "any member" for both, but its own open questions still ask whether usage should be restricted to admins. The tier mechanism in D11 makes this a one-constant change per endpoint, so it does not block implementation.
-- Whether `/accounting/skus` and `/accounting/prices` should start requiring a token. They take none today, so pound-denominated values derived from the pricing policy stay publicly reachable even though the policy endpoint itself requires a member.
+- Whether a caller should see every category multiplier or only the one their own workspace prices under. Tracked in the [scoping note](credits-ledger-scoping.md).
